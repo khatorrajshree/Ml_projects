@@ -1,0 +1,299 @@
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+-- creating table NewyorkTLC---------------------------(VendorID, tpep_pickup_datetime,tpep_dropoff_datetime,Passenger_count,Trip_distance, 
+--RateCodeID, Store_and_fwd_flag, PULocationID, DOLocationID, Payment_type, Fare_amount, Extra, MTA_tax, Tip_amount,
+--Tolls_amount,Improvement_surcharge, Total_amount)
+
+create external table if not exists NewyorkTLC(VendorID int , tpep_pickup_datetime timestamp , tpep_dropoff_datetime timestamp, Passenger_count int,
+Trip_distance double, RateCodeID int, Store_and_fwd_flag string, PULocationID int, DOLocationID int, Payment_type int, Fare_amount double, Extra double, 
+MTA_tax double, Tip_amount double,Tolls_amount double, Improvement_surcharge double, Total_amount double)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'      
+with serdeproperties  ('paths' = '')
+location '/common_folder/nyc_taxi_data/';
+
+--checking table content
+select * from newyorktlc limit 10;
+
+--We need to remove header from the table..
+
+ALTER TABLE NewyorkTLC SET TBLPROPERTIES ("skip.header.line.count"="1");
+
+--Data quality issue check and EDA-----------------------
+--Checking how many data each vendor has provided
+
+select count(*) as Datacount, VendorID
+from newyorktlc
+group by VendorID;
+
+-- VendorId 1 = 527386, vendorId 2 = 647183
+
+-- checking for passenger count
+select count(*) as No_of_Passengers, Passenger_count
+from newyorktlc
+group by Passenger_count;
+
+-- total 6824 data showing 0 passenger count which is needed to be removed
+
+-- let us see which vendor has provided most of the wrong data
+
+select count(*) as No_of_Passengers , Passenger_count, VendorId
+from newyorktlc
+group by VendorId, Passenger_count;
+
+-- total of 6813 pessenger count = 0 is given by Vender1
+-- and 11 passengers count = 0 by vender2
+
+---let us check Trip Distance
+
+select count(*), Trip_distance
+from newyorktlc
+group by Trip_distance;
+
+-- there are around 7402 records where trip distance is 0
+--although there are some data where where cahrges has been applied for distance 0
+-- considering it as a faulty data and hence removing the rows with distance 0.
+
+----RateCodeId Check(valid code id(1,2,3,4,5,6))---------------------
+select RateCodeID, count(*)
+from NewyorkTLC
+group by RateCodeID;
+
+--there is ratecodeid which is not valid which is 99 an has to be removed
+
+----Checking Fare amount
+select count(*), Fare_amount
+from newyorktlc
+group by Fare_amount;
+
+-- there are negative fare amount and zero fare amount which are invalid and needs to be removed -----
+
+--Checking extra amount(valid values (0, 0.5 for rush hrs, 1 for night hrs)------
+select count(*), Extra
+from newyorktlc
+group by Extra;
+
+--- there are some negative values  and other values appart from(0,0.5,1)in extra which needs to be removed
+
+--Checking MTA_tax(valid values 0,0.5)--------------
+select count(*), MTA_tax
+from newyorktlc
+group by MTA_tax;
+
+------some negative and outlyers values should be removed
+
+---Checking Tip amount(valid value o or other positive value)------
+select count(*), Tip_amount
+from newyorktlc
+where Tip_amount < 0
+group by Tip_amount;
+
+---some values are negative which should be removed----------
+
+----checking toll amount(valid 0 or other positive value)
+select count(*), Tolls_amount
+from newyorktlc
+where Tolls_amount < 0
+group by Tolls_amount;
+
+--some values are negative which needs  to be removed---
+
+-----checking Improvement_surcharge(valid values 0, 0.3)
+
+select count(*), Improvement_surcharge
+from newyorktlc
+group by Improvement_surcharge;
+
+--there are some negative values and some invalid values which need to be removed
+
+--checking for Total_amount
+
+select count(*), Total_amount
+from newyorktlc
+where Total_amount <= 0
+group by Total_amount;
+
+---all negative and zero value should be removed
+
+
+--Creating partition table partitioned by year and month  and limiting data only for year 2017 and month only
+--for november and december and removing all data quality issues----------------------------------------------
+
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+create external table if not exists NewyorkTLC_Part_year_month(VendorID int , tpep_pickup_datetime timestamp , tpep_dropoff_datetime timestamp, Passenger_count int,
+Trip_distance double, RateCodeID int, Store_and_fwd_flag string, PULocationID int, DOLocationID int, Payment_type int, Fare_amount double, Extra double, 
+MTA_tax double, Tip_amount double,Tolls_amount double, Improvement_surcharge double, Total_amount double) partitioned by (year int, month int)
+location '/user/hive/warehouse/data246';
+
+----------inserting table values from NewyorkTLC table---------------------------------------
+
+insert overwrite table NewyorkTLC_Part_year_month partition(year, month)
+select VendorID, tpep_pickup_datetime, tpep_dropoff_datetime, Passenger_count, Trip_distance, 
+RateCodeID, Store_and_fwd_flag, PULocationID, DOLocationID, Payment_type, Fare_amount, Extra, MTA_tax, Tip_amount,
+Tolls_amount,Improvement_surcharge, Total_amount, year(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as year, month(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as month
+from NewyorkTLC
+where year(from_unixtime(unix_timestamp(tpep_pickup_datetime))) = 2017 and month(from_unixtime(unix_timestamp(tpep_pickup_datetime))) in (11,12)
+and Passenger_count > 0 and Trip_distance > 0 and RateCodeID in(1,2,3,4,5,6) and Fare_amount > 0 and Extra in( 0, 0.5, 1) and 
+MTA_tax in (0, 0.5) and Tip_amount >= 0 and Improvement_surcharge in (0, 0.3) and Tolls_amount >= 0 and Total_amount > 0;
+
+
+select * from NewyorkTLC_Part_year_month limit 30;
+
+
+-- checking how many data are provided by each vendor
+select count(*), VendorID
+from newyorktlc_part_year_month
+group by VendorID;
+-- VendorId 1 = 516302, vendorId 2 = 643509
+
+--- creating orc table a compressed table-------------------------------
+
+create external table if not exists newyorktlc_orc
+(VendorID int , tpep_pickup_datetime timestamp , tpep_dropoff_datetime timestamp, Passenger_count int,
+Trip_distance double, RateCodeID int, Store_and_fwd_flag string, PULocationID int, DOLocationID int, Payment_type int, Fare_amount double, Extra double, 
+MTA_tax double, Tip_amount double,Tolls_amount double, Improvement_surcharge double, Total_amount double) partitioned by (year int, month int)
+stored as orc location '/user/hive/warehouse/data567'
+tblproperties ("orc.compress"="SNAPPY");
+
+insert overwrite table newyorktlc_orc partition(year , month)
+select * from newyorktlc_part_year_month;
+
+select * from newyorktlc_orc limit 10;
+
+-----ANALYSIS 1 -------------------------------------------------------------------------------------------------------
+
+--1. Compare the overall average fare per trip for November and December.
+-- here Fare_amount is considered for average
+
+select avg(Fare_amount) as AverageFairPerTrip, month
+from newyorktlc_orc
+group by month;
+
+--- Average fair per trip for november is $13.06
+--- while that of December is $12.85
+
+--2. Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? 
+--   Do most people travel solo or with other people?
+
+select Passenger_count, count(*) as numberof_people_per_trip
+from newyorktlc_orc
+group by Passenger_count;
+
+	
+ --passenger_count	numberof_people_per_trip
+--	1	              821304
+--	2	              175852
+--	3	              50459
+--	4	              24814
+--	5	              54342
+--	6	              33037
+--	7	              3
+
+
+-- 8,21,304 people like travel alone which is 75% of data
+-- so most people like to travel alone
+
+--3. Which is the most preferred mode of payment?
+
+select Payment_type, count(*) as People_Payment_Count
+from newyorktlc_orc
+group by Payment_type;
+
+-- People mostly prefer using payment type 1 which is Credit Card , count = 7,82,807 people use credit card payment
+
+--4. What is the average tip paid per trip? Compare the average tip with the 25th, 50th and 75th percentiles 
+--   and comment whether the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’. 
+
+select round(avg(Tip_amount),2) as AverageTipAmount, round(percentile_approx(Tip_amount, 0.25),2) as 25th_Percentile, 
+round(percentile_approx(Tip_amount, 0.50),2) as 50th_Percentile, round(percentile_approx(Tip_amount, 0.75),2) as 75th_Percentile
+from newyorktlc_orc;
+
+	
+ --	averagetipamount	25th_percentile	  50th_percentile	  75th_percentile
+ --   	1.85                	0           	1.36	           2.45
+	
+-- mean(1.85) is greater than the median(1.36)
+
+--5. Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+
+select
+case when Extra > 0 then "Tax Levied"
+  else "No Tax"
+end As Taxed_or_Not,
+count(*) as Total_count, round(count(*) * 100.0 / sum(count(*)) over(),2) as percentage
+from newyorktlc_orc
+group by 
+case when Extra > 0 then "Tax Levied"
+  else "No Tax"
+end;
+-- 46.34% which is 537405 of total people on whom tax is levied.
+
+-- 	taxed_or_not	total_count	percentage
+--1	 Tax Levied	      537405	 46.34%
+--2	 No Tax	          622406	 53.66%
+
+---------------------------Analysis 2---------------------------------------------------------------------------
+
+--1. What is the correlation between the number of passengers on any given trip,
+--   and the tip paid per trip? Do multiple travellers tip more compared to solo travellers?
+
+select corr(Tip_amount, Passenger_count) as correlation
+from newyorktlc_orc;
+
+--There is no corelation(0.009) between the two so passenger's count does not influence tip amount
+
+--2. Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+--  Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+
+select
+ CASE WHEN Tip_amount >= 0 AND Tip_amount < 5 THEN "Bucket[0-5)"
+ WHEN Tip_amount >= 5 AND Tip_amount < 10 THEN "Bucket[5-10)"
+ WHEN Tip_amount >= 10 AND Tip_amount < 15 THEN "Bucket[10-15)"
+ WHEN Tip_amount >= 15 AND Tip_amount < 20 THEN "Bucket[15-20)"
+ ELSE "Bucket_rest"
+ end as bucket,
+ count(*) as Num_in_each_bucket, round(count(*) * 100.0 / sum(count(*)) over(),2) as Percent_of_trip
+FROM newyorktlc_orc
+GROUP BY 
+CASE WHEN Tip_amount >= 0 AND Tip_amount < 5 THEN "Bucket[0-5)"
+ WHEN Tip_amount >= 5 AND Tip_amount < 10 THEN "Bucket[5-10)"
+ WHEN Tip_amount >= 10 AND Tip_amount < 15 THEN "Bucket[10-15)"
+ WHEN Tip_amount >= 15 AND Tip_amount < 20 THEN "Bucket[15-20)"
+ ELSE "Bucket_rest"
+ end;
+--above command give the following results with 92% trip falling is 0-5 bucket
+--    bucket	  num_in_each_bucket	percent_of_trip
+ 	
+--	Bucket_rest 	  1064	                 0.09
+--  Bucket[5-10)	  65615	                 5.66
+--	Bucket[15-20)	  2627	                 0.23
+--	Bucket[10-15)	  21410	                 1.85
+--	Bucket[0-5)	      1069095	             92.18
+ 
+--3. Which month has a greater average ‘speed’ - November or December?
+
+select month, round(sum(Trip_distance)/(sum(UNIX_TIMESTAMP(tpep_dropoff_datetime) - UNIX_TIMESTAMP(tpep_pickup_datetime))/3600),2) as Average_Speed_miles_per_hr
+from newyorktlc_orc
+group by month;
+
+-- Average speed for november is 9.19miles/hr
+-- Average speed for december is 9.82miles/hr
+-- month december has greater speed than november
+
+--4. Analyse the average speed of the most happening days of the year, 
+-- i.e. 31st December (New year’s eve) and 25th December (Christmas) and compare it with the overall average. 
+-- assumption -here overall average is average speed of december month
+select day(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as Day,
+round(sum(Trip_distance)/(sum(UNIX_TIMESTAMP(tpep_dropoff_datetime) - UNIX_TIMESTAMP(tpep_pickup_datetime))/3600),2) as Average_Speed_miles_per_hr
+from newyorktlc_orc
+where day(from_unixtime(unix_timestamp(tpep_pickup_datetime))) in(25, 31) and month(from_unixtime(unix_timestamp(tpep_pickup_datetime))) = 12
+group by day(from_unixtime(unix_timestamp(tpep_pickup_datetime)));
+
+
+--	day	    average_speed_miles_per_hr
+--	25	             12.23
+--	31	             11.68
+
+--25th december(Chirismas Day) has greater average speed(12.23 miles/hr) than 31th december(11.68 miles/hr)
+-- both days 25th and 31st december has greater average speed than average speed of month(9.82miles/hr).

@@ -1,5 +1,5 @@
 Case study - Spark - NYC Parking Tickets: An Exploratory Analysis
-## Name - Preksha Tiwari,Rupashi Jain,Rajshree Khator
+Rajshree Khator
 ## Instructions - 1. Load SparkR
 ##              - 2. Initialise a Spark session
 

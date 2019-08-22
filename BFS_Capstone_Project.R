@@ -1,5 +1,5 @@
 ## Module - BFS Capstone Project
-## Name - Preksha,Rupashi,Rajshree
+## Name - Rajshree
 
 ## Business Understanding:
 # CredX is a leading credit card provider that gets thousands of credit card applicants every year. 
